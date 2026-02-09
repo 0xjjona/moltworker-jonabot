@@ -2,7 +2,6 @@ import type { Sandbox } from '@cloudflare/sandbox';
 import type { MoltbotEnv } from '../types';
 import { R2_MOUNT_PATH } from '../config';
 import { mountR2Storage } from './r2';
-import { waitForProcess } from './utils';
 
 export interface SyncResult {
   success: boolean;
@@ -42,24 +41,22 @@ export async function syncToR2(sandbox: Sandbox, env: MoltbotEnv): Promise<SyncR
   }
 
   // Determine which config directory exists
-  // Check new path first, fall back to legacy
-  // Use exit code (0 = exists) rather than stdout parsing to avoid log-flush races
   let configDir = '/root/.openclaw';
   try {
-    const checkNew = await sandbox.startProcess('test -f /root/.openclaw/openclaw.json');
-    await waitForProcess(checkNew, 5000);
-    if (checkNew.exitCode !== 0) {
-      const checkLegacy = await sandbox.startProcess('test -f /root/.clawdbot/clawdbot.json');
-      await waitForProcess(checkLegacy, 5000);
-      if (checkLegacy.exitCode === 0) {
-        configDir = '/root/.clawdbot';
-      } else {
-        return {
-          success: false,
-          error: 'Sync aborted: no config file found',
-          details: 'Neither openclaw.json nor clawdbot.json found in config directory.',
-        };
-      }
+    const checkResult = await sandbox.exec(
+      'if [ -f /root/.openclaw/openclaw.json ]; then echo "FOUND:openclaw"; elif [ -f /root/.clawdbot/clawdbot.json ]; then echo "FOUND:clawdbot"; else echo "FOUND:none"; fi'
+    );
+    const output = (checkResult.stdout || '').trim();
+    console.log('Config check output:', JSON.stringify(output), 'exitCode:', checkResult.exitCode);
+
+    if (output.includes('FOUND:clawdbot')) {
+      configDir = '/root/.clawdbot';
+    } else if (!output.includes('FOUND:openclaw')) {
+      return {
+        success: false,
+        error: 'Sync aborted: no config file found',
+        details: `Neither openclaw.json nor clawdbot.json found. Output: ${output}`,
+      };
     }
   } catch (err) {
     return {
@@ -74,23 +71,26 @@ export async function syncToR2(sandbox: Sandbox, env: MoltbotEnv): Promise<SyncR
   const syncCmd = `rsync -r --no-times --delete --exclude='*.lock' --exclude='*.log' --exclude='*.tmp' ${configDir}/ ${R2_MOUNT_PATH}/openclaw/ && rsync -r --no-times --delete --exclude='skills' /root/clawd/ ${R2_MOUNT_PATH}/workspace/ && rsync -r --no-times --delete /root/clawd/skills/ ${R2_MOUNT_PATH}/skills/ && date -Iseconds > ${R2_MOUNT_PATH}/.last-sync`;
 
   try {
-    const proc = await sandbox.startProcess(syncCmd);
-    await waitForProcess(proc, 30000); // 30 second timeout for sync
+    const syncResult = await sandbox.exec(syncCmd);
+    if (syncResult.exitCode !== 0) {
+      return {
+        success: false,
+        error: 'Sync failed',
+        details: syncResult.stderr || syncResult.stdout || `Exit code: ${syncResult.exitCode}`,
+      };
+    }
 
     // Check for success by reading the timestamp file
-    const timestampProc = await sandbox.startProcess(`cat ${R2_MOUNT_PATH}/.last-sync`);
-    await waitForProcess(timestampProc, 5000);
-    const timestampLogs = await timestampProc.getLogs();
-    const lastSync = timestampLogs.stdout?.trim();
+    const tsResult = await sandbox.exec(`cat ${R2_MOUNT_PATH}/.last-sync`);
+    const lastSync = (tsResult.stdout || '').trim();
 
     if (lastSync && lastSync.match(/^\d{4}-\d{2}-\d{2}/)) {
       return { success: true, lastSync };
     } else {
-      const logs = await proc.getLogs();
       return {
         success: false,
         error: 'Sync failed',
-        details: logs.stderr || logs.stdout || 'No timestamp file created',
+        details: 'No timestamp file created',
       };
     }
   } catch (err) {

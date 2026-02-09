@@ -121,8 +121,10 @@ fi
 # ============================================================
 # ONBOARD (only if no config exists yet)
 # ============================================================
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "No existing config found, running openclaw onboard..."
+# Always re-onboard to pick up current env vars (token, API key, etc.)
+rm -f "$CONFIG_FILE"
+if true; then
+    echo "Running openclaw onboard..."
 
     AUTH_ARGS=""
     if [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
@@ -279,6 +281,18 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
         enabled: true,
     };
 }
+
+// Model override (from env var, defaults to sonnet)
+var modelOverride = process.env.OPENCLAW_MODEL || 'anthropic/claude-sonnet-4-5';
+config.agents = config.agents || {};
+config.agents.defaults = config.agents.defaults || {};
+config.agents.defaults.model = { primary: modelOverride };
+
+// Webhook configuration (for TradingView alerts etc.)
+config.hooks = config.hooks || {};
+config.hooks.enabled = true;
+config.hooks.token = process.env.WEBHOOK_SECRET || process.env.OPENCLAW_GATEWAY_TOKEN;
+config.hooks.path = '/hooks';
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');

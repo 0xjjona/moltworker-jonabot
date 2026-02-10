@@ -62,7 +62,7 @@ should_restore_from_r2() {
 if [ -f "$BACKUP_DIR/openclaw/openclaw.json" ]; then
     if should_restore_from_r2; then
         echo "Restoring from R2 backup at $BACKUP_DIR/openclaw..."
-        cp -a "$BACKUP_DIR/openclaw/." "$CONFIG_DIR/"
+        rsync -r --no-times "$BACKUP_DIR/openclaw/" "$CONFIG_DIR/" 2>/dev/null || true
         cp -f "$BACKUP_DIR/.last-sync" "$CONFIG_DIR/.last-sync" 2>/dev/null || true
         echo "Restored config from R2 backup"
     fi
@@ -70,7 +70,7 @@ elif [ -f "$BACKUP_DIR/clawdbot/clawdbot.json" ]; then
     # Legacy backup format — migrate .clawdbot data into .openclaw
     if should_restore_from_r2; then
         echo "Restoring from legacy R2 backup at $BACKUP_DIR/clawdbot..."
-        cp -a "$BACKUP_DIR/clawdbot/." "$CONFIG_DIR/"
+        rsync -r --no-times "$BACKUP_DIR/clawdbot/" "$CONFIG_DIR/" 2>/dev/null || true
         cp -f "$BACKUP_DIR/.last-sync" "$CONFIG_DIR/.last-sync" 2>/dev/null || true
         # Rename the config file if it has the old name
         if [ -f "$CONFIG_DIR/clawdbot.json" ] && [ ! -f "$CONFIG_FILE" ]; then
@@ -82,7 +82,7 @@ elif [ -f "$BACKUP_DIR/clawdbot.json" ]; then
     # Very old legacy backup format (flat structure)
     if should_restore_from_r2; then
         echo "Restoring from flat legacy R2 backup at $BACKUP_DIR..."
-        cp -a "$BACKUP_DIR/." "$CONFIG_DIR/"
+        rsync -r --no-times "$BACKUP_DIR/" "$CONFIG_DIR/" 2>/dev/null || true
         cp -f "$BACKUP_DIR/.last-sync" "$CONFIG_DIR/.last-sync" 2>/dev/null || true
         if [ -f "$CONFIG_DIR/clawdbot.json" ] && [ ! -f "$CONFIG_FILE" ]; then
             mv "$CONFIG_DIR/clawdbot.json" "$CONFIG_FILE"
@@ -102,7 +102,7 @@ if [ -d "$BACKUP_DIR/workspace" ] && [ "$(ls -A $BACKUP_DIR/workspace 2>/dev/nul
     if should_restore_from_r2; then
         echo "Restoring workspace from $BACKUP_DIR/workspace..."
         mkdir -p "$WORKSPACE_DIR"
-        cp -a "$BACKUP_DIR/workspace/." "$WORKSPACE_DIR/"
+        rsync -r --no-times "$BACKUP_DIR/workspace/" "$WORKSPACE_DIR/" 2>/dev/null || true
         echo "Restored workspace from R2 backup"
     fi
 fi
@@ -113,7 +113,7 @@ if [ -d "$BACKUP_DIR/skills" ] && [ "$(ls -A $BACKUP_DIR/skills 2>/dev/null)" ];
     if should_restore_from_r2; then
         echo "Restoring skills from $BACKUP_DIR/skills..."
         mkdir -p "$SKILLS_DIR"
-        cp -a "$BACKUP_DIR/skills/." "$SKILLS_DIR/"
+        rsync -r --no-times "$BACKUP_DIR/skills/" "$SKILLS_DIR/" 2>/dev/null || true
         echo "Restored skills from R2 backup"
     fi
 fi
@@ -121,10 +121,11 @@ fi
 # ============================================================
 # ONBOARD (only if no config exists yet)
 # ============================================================
-# Always re-onboard to pick up current env vars (token, API key, etc.)
-rm -f "$CONFIG_FILE"
-if true; then
-    echo "Running openclaw onboard..."
+# Only onboard if no config exists (fresh install).
+# If config exists (restored from R2), skip onboard to preserve sessions/memory.
+# The config patch below handles env var updates (API keys, channels, etc.)
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "No config found, running openclaw onboard..."
 
     AUTH_ARGS=""
     if [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
@@ -282,11 +283,38 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
+// Force-enable channel plugins to match channels config
+// OpenClaw's plugin-auto-enable won't auto-enable unless plugins.entries.*.enabled is true
+config.plugins = config.plugins || {};
+config.plugins.entries = config.plugins.entries || {};
+if (process.env.TELEGRAM_BOT_TOKEN) {
+    config.plugins.entries.telegram = { enabled: true };
+    console.log('Set plugins.entries.telegram.enabled = true');
+}
+if (process.env.DISCORD_BOT_TOKEN) {
+    config.plugins.entries.discord = { enabled: true };
+}
+if (process.env.SLACK_BOT_TOKEN) {
+    config.plugins.entries.slack = { enabled: true };
+}
+
+// Brave Search API for web search tool
+if (process.env.BRAVE_API_KEY) {
+    config.tools = config.tools || {};
+    config.tools.web = config.tools.web || {};
+    config.tools.web.search = {
+        provider: 'brave',
+        apiKey: process.env.BRAVE_API_KEY,
+    };
+    console.log('Brave Search API configured');
+}
+
 // Model override (from env var, defaults to sonnet)
 var modelOverride = process.env.OPENCLAW_MODEL || 'anthropic/claude-sonnet-4-5';
 config.agents = config.agents || {};
 config.agents.defaults = config.agents.defaults || {};
 config.agents.defaults.model = { primary: modelOverride };
+config.agents.defaults.bootstrapMaxChars = 8000;
 
 // Webhook configuration (for TradingView alerts etc.)
 config.hooks = config.hooks || {};

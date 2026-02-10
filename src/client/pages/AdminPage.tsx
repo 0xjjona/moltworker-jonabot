@@ -6,11 +6,17 @@ import {
   restartGateway,
   getStorageStatus,
   triggerSync,
+  listFiles,
+  readFile,
+  writeFile,
+  createDirectory,
+  deleteFile,
   AuthError,
   type PendingDevice,
   type PairedDevice,
   type DeviceListResponse,
   type StorageStatusResponse,
+  type FileEntry,
 } from '../api';
 import './AdminPage.css';
 
@@ -34,6 +40,12 @@ function formatTimestamp(ts: number) {
   return date.toLocaleString();
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function formatTimeAgo(ts: number) {
   const seconds = Math.floor((Date.now() - ts) / 1000);
   if (seconds < 60) return `${seconds}s ago`;
@@ -54,6 +66,19 @@ export default function AdminPage() {
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [restartInProgress, setRestartInProgress] = useState(false);
   const [syncInProgress, setSyncInProgress] = useState(false);
+
+  // File browser state
+  const WORKSPACE_ROOT = '/root/clawd';
+  const [fileBrowserPath, setFileBrowserPath] = useState(WORKSPACE_ROOT);
+  const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<{ path: string; content: string } | null>(null);
+  const [editingFile, setEditingFile] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [fileSaving, setFileSaving] = useState(false);
+  const [showNewFileDialog, setShowNewFileDialog] = useState(false);
+  const [showNewFolderDialog, setShowNewFolderDialog] = useState(false);
+  const [newItemName, setNewItemName] = useState('');
 
   const fetchDevices = useCallback(async () => {
     try {
@@ -171,6 +196,108 @@ export default function AdminPage() {
       setSyncInProgress(false);
     }
   };
+
+  // File browser handlers
+  const fetchFiles = useCallback(async (path?: string) => {
+    const targetPath = path || fileBrowserPath;
+    setFilesLoading(true);
+    try {
+      const data = await listFiles(targetPath);
+      setFileEntries(data.entries || []);
+      setFileBrowserPath(targetPath);
+      setSelectedFile(null);
+      setEditingFile(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to list files');
+    } finally {
+      setFilesLoading(false);
+    }
+  }, [fileBrowserPath]);
+
+  const handleFileClick = async (entry: FileEntry) => {
+    const fullPath = `${fileBrowserPath}/${entry.name}`.replace(/\/+/g, '/');
+    if (entry.type === 'dir') {
+      fetchFiles(fullPath);
+    } else {
+      try {
+        const data = await readFile(fullPath);
+        setSelectedFile({ path: fullPath, content: data.content });
+        setEditingFile(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to read file');
+      }
+    }
+  };
+
+  const handleNavigateUp = () => {
+    if (fileBrowserPath === WORKSPACE_ROOT) return;
+    const parent = fileBrowserPath.substring(0, fileBrowserPath.lastIndexOf('/')) || WORKSPACE_ROOT;
+    fetchFiles(parent.startsWith(WORKSPACE_ROOT) ? parent : WORKSPACE_ROOT);
+  };
+
+  const handleBreadcrumbClick = (index: number) => {
+    const relativePath = fileBrowserPath.replace(WORKSPACE_ROOT, '');
+    const parts = relativePath.split('/').filter(Boolean);
+    const targetPath = WORKSPACE_ROOT + '/' + parts.slice(0, index).join('/');
+    fetchFiles(targetPath.replace(/\/+$/, '') || WORKSPACE_ROOT);
+  };
+
+  const handleSaveFile = async () => {
+    if (!selectedFile) return;
+    setFileSaving(true);
+    try {
+      await writeFile(selectedFile.path, editContent);
+      setSelectedFile({ ...selectedFile, content: editContent });
+      setEditingFile(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save file');
+    } finally {
+      setFileSaving(false);
+    }
+  };
+
+  const handleCreateFile = async () => {
+    if (!newItemName.trim()) return;
+    const fullPath = `${fileBrowserPath}/${newItemName.trim()}`.replace(/\/+/g, '/');
+    try {
+      await writeFile(fullPath, '');
+      setShowNewFileDialog(false);
+      setNewItemName('');
+      fetchFiles();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create file');
+    }
+  };
+
+  const handleCreateFolder = async () => {
+    if (!newItemName.trim()) return;
+    const fullPath = `${fileBrowserPath}/${newItemName.trim()}`.replace(/\/+/g, '/');
+    try {
+      await createDirectory(fullPath);
+      setShowNewFolderDialog(false);
+      setNewItemName('');
+      fetchFiles();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create folder');
+    }
+  };
+
+  const handleDeleteFile = async (entry: FileEntry) => {
+    const fullPath = `${fileBrowserPath}/${entry.name}`.replace(/\/+/g, '/');
+    if (!confirm(`Delete "${entry.name}"? This cannot be undone.`)) return;
+    try {
+      await deleteFile(fullPath);
+      if (selectedFile?.path === fullPath) setSelectedFile(null);
+      fetchFiles();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete');
+    }
+  };
+
+  // Load files on mount
+  useEffect(() => {
+    fetchFiles();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="devices-page">
@@ -405,6 +532,147 @@ export default function AdminPage() {
           </section>
         </>
       )}
+
+      {/* File Browser Section */}
+      <section className="devices-section files-section">
+        <div className="section-header">
+          <h2>Workspace Files</h2>
+          <div className="header-actions">
+            <button className="btn btn-secondary btn-sm" onClick={() => { setShowNewFileDialog(true); setNewItemName(''); }}>
+              + File
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { setShowNewFolderDialog(true); setNewItemName(''); }}>
+              + Folder
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => fetchFiles()} disabled={filesLoading}>
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Breadcrumb */}
+        <div className="files-breadcrumb">
+          <button className="breadcrumb-item" onClick={() => fetchFiles(WORKSPACE_ROOT)}>
+            workspace
+          </button>
+          {fileBrowserPath.replace(WORKSPACE_ROOT, '').split('/').filter(Boolean).map((part, i) => (
+            <span key={i}>
+              <span className="breadcrumb-sep">/</span>
+              <button className="breadcrumb-item" onClick={() => handleBreadcrumbClick(i + 1)}>
+                {part}
+              </button>
+            </span>
+          ))}
+        </div>
+
+        {/* New file/folder dialog */}
+        {(showNewFileDialog || showNewFolderDialog) && (
+          <div className="new-item-dialog">
+            <input
+              type="text"
+              className="new-item-input"
+              placeholder={showNewFileDialog ? 'filename.md' : 'folder-name'}
+              value={newItemName}
+              onChange={(e) => setNewItemName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') showNewFileDialog ? handleCreateFile() : handleCreateFolder();
+                if (e.key === 'Escape') { setShowNewFileDialog(false); setShowNewFolderDialog(false); }
+              }}
+              autoFocus
+            />
+            <button className="btn btn-success btn-sm" onClick={showNewFileDialog ? handleCreateFile : handleCreateFolder}>
+              Create
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { setShowNewFileDialog(false); setShowNewFolderDialog(false); }}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* File list */}
+        {filesLoading ? (
+          <div className="loading" style={{ minHeight: '100px' }}>
+            <div className="spinner" />
+          </div>
+        ) : (
+          <div className="files-list">
+            {fileBrowserPath !== WORKSPACE_ROOT && (
+              <div className="file-row" onClick={handleNavigateUp}>
+                <span className="file-icon">&#128194;</span>
+                <span className="file-name">..</span>
+                <span className="file-size"></span>
+                <span className="file-actions"></span>
+              </div>
+            )}
+            {fileEntries
+              .sort((a, b) => {
+                if (a.type === 'dir' && b.type !== 'dir') return -1;
+                if (a.type !== 'dir' && b.type === 'dir') return 1;
+                return a.name.localeCompare(b.name);
+              })
+              .map((entry) => (
+              <div
+                key={entry.name}
+                className={`file-row ${selectedFile?.path === `${fileBrowserPath}/${entry.name}` ? 'selected' : ''}`}
+                onClick={() => handleFileClick(entry)}
+              >
+                <span className="file-icon">{entry.type === 'dir' ? '\uD83D\uDCC1' : '\uD83D\uDCC4'}</span>
+                <span className="file-name">{entry.name}</span>
+                <span className="file-size">{entry.type === 'file' ? formatFileSize(entry.size) : ''}</span>
+                <span className="file-actions" onClick={(e) => e.stopPropagation()}>
+                  <button className="btn-icon btn-delete" onClick={() => handleDeleteFile(entry)} title="Delete">
+                    &#x2715;
+                  </button>
+                </span>
+              </div>
+            ))}
+            {fileEntries.length === 0 && fileBrowserPath === WORKSPACE_ROOT && (
+              <div className="empty-state" style={{ padding: '1.5rem' }}>
+                <p>Workspace is empty</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* File viewer/editor */}
+        {selectedFile && (
+          <div className="file-viewer">
+            <div className="file-viewer-header">
+              <span className="file-viewer-path">{selectedFile.path.replace(WORKSPACE_ROOT + '/', '')}</span>
+              <div className="header-actions">
+                {editingFile ? (
+                  <>
+                    <button className="btn btn-success btn-sm" onClick={handleSaveFile} disabled={fileSaving}>
+                      {fileSaving && <ButtonSpinner />}
+                      {fileSaving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => setEditingFile(false)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn btn-primary btn-sm" onClick={() => { setEditContent(selectedFile.content); setEditingFile(true); }}>
+                    Edit
+                  </button>
+                )}
+                <button className="btn btn-secondary btn-sm" onClick={() => setSelectedFile(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            {editingFile ? (
+              <textarea
+                className="file-editor"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                spellCheck={false}
+              />
+            ) : (
+              <pre className="file-content">{selectedFile.content}</pre>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -51,7 +51,10 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   if (env.WORKER_URL) envVars.WORKER_URL = env.WORKER_URL;
   if (env.OPENCLAW_MODEL) envVars.OPENCLAW_MODEL = env.OPENCLAW_MODEL;
   if (env.WEBHOOK_SECRET) envVars.WEBHOOK_SECRET = env.WEBHOOK_SECRET;
-
+  if (env.BRAVE_API_KEY) envVars.BRAVE_API_KEY = env.BRAVE_API_KEY;
+  if (env.FINNHUB_API_KEY) envVars.FINNHUB_API_KEY = env.FINNHUB_API_KEY;
+  if (env.FINANCE_BOT_TOKEN) envVars.FINANCE_BOT_TOKEN = env.FINANCE_BOT_TOKEN;
+  if (env.FINANCE_CHAT_ID) envVars.FINANCE_CHAT_ID = env.FINANCE_CHAT_ID;
 
   return envVars;
 }

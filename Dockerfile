@@ -22,7 +22,7 @@ RUN npm install -g pnpm
 
 # Install OpenClaw (formerly clawdbot/moltbot)
 # Pin to specific version for reproducible builds
-RUN npm install -g openclaw@2026.2.3 \
+RUN npm install -g openclaw@2026.2.9 \
     && openclaw --version
 
 # Create OpenClaw directories
@@ -32,12 +32,13 @@ RUN mkdir -p /root/.openclaw \
     && mkdir -p /root/clawd/skills
 
 # Copy startup script
-# Build cache bust: 2026-02-08-fresh-start
+# Build cache bust: 2026-02-10-force-enable-plugins
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN sed -i 's/\r$//' /usr/local/bin/start-openclaw.sh && chmod +x /usr/local/bin/start-openclaw.sh
 
-# Copy custom skills
+# Copy custom skills and install their dependencies
 COPY skills/ /root/clawd/skills/
+RUN cd /root/clawd/skills/market-data && npm install --production 2>/dev/null || true
 
 # Set working directory
 WORKDIR /root/clawd

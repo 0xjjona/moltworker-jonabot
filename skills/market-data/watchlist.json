@@ -1,0 +1,5 @@
+{
+  "stocks": ["AAPL", "MSFT", "NVDA", "TSLA", "META", "AMZN", "GOOGL", "AMD", "NFLX", "CRM"],
+  "crypto": ["bitcoin", "ethereum", "solana", "ripple"],
+  "commodities": ["GC=F", "SI=F", "CL=F", "NG=F", "HG=F", "PL=F"]
+}

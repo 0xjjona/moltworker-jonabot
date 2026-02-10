@@ -137,3 +137,59 @@ export async function triggerSync(): Promise<SyncResponse> {
     method: 'POST',
   });
 }
+
+// --- File Browser API ---
+
+export interface FileEntry {
+  name: string;
+  type: 'file' | 'dir' | 'link';
+  size: number;
+  permissions: string;
+}
+
+export interface FileListResponse {
+  path: string;
+  entries: FileEntry[];
+  error?: string;
+}
+
+export interface FileReadResponse {
+  path: string;
+  content: string;
+  error?: string;
+}
+
+export interface FileWriteResponse {
+  success: boolean;
+  path: string;
+  error?: string;
+}
+
+export async function listFiles(path?: string): Promise<FileListResponse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  return apiRequest<FileListResponse>(`/files${query}`);
+}
+
+export async function readFile(path: string): Promise<FileReadResponse> {
+  return apiRequest<FileReadResponse>(`/files/read?path=${encodeURIComponent(path)}`);
+}
+
+export async function writeFile(path: string, content: string): Promise<FileWriteResponse> {
+  return apiRequest<FileWriteResponse>('/files/write', {
+    method: 'POST',
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+export async function createDirectory(path: string): Promise<FileWriteResponse> {
+  return apiRequest<FileWriteResponse>('/files/mkdir', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function deleteFile(path: string): Promise<FileWriteResponse> {
+  return apiRequest<FileWriteResponse>(`/files?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+  });
+}

@@ -44,6 +44,10 @@ export interface MoltbotEnv {
   WORKER_URL?: string; // Public URL of the worker (for CDP endpoint)
   OPENCLAW_MODEL?: string;
   WEBHOOK_SECRET?: string;
+  BRAVE_API_KEY?: string;
+  FINNHUB_API_KEY?: string;
+  FINANCE_BOT_TOKEN?: string;
+  FINANCE_CHAT_ID?: string;
 }
 
 /**

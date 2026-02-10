@@ -307,6 +307,160 @@ adminApi.post('/gateway/restart', async (c) => {
   }
 });
 
+// --- File Browser API ---
+
+const WORKSPACE_ROOT = '/root/clawd';
+
+function validatePath(path: string): boolean {
+  const resolved = path.replace(/\/+/g, '/').replace(/\/$/, '');
+  return resolved.startsWith(WORKSPACE_ROOT) && !path.includes('..');
+}
+
+// GET /api/admin/files?path= - List directory contents
+adminApi.get('/files', async (c) => {
+  const sandbox = c.get('sandbox');
+  const path = c.req.query('path') || WORKSPACE_ROOT;
+
+  if (!validatePath(path)) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  try {
+    const result = await sandbox.exec(
+      `ls -la "${path}" 2>&1 | tail -n +2`,
+    );
+
+    if (result.exitCode !== 0) {
+      return c.json({ error: 'Directory not found', details: result.stderr || result.stdout }, 404);
+    }
+
+    const entries = (result.stdout || '')
+      .trim()
+      .split('\n')
+      .filter((line: string) => line.length > 0)
+      .map((line: string) => {
+        const parts = line.split(/\s+/);
+        if (parts.length < 9) return null;
+        const perms = parts[0];
+        const size = parseInt(parts[4], 10);
+        const name = parts.slice(8).join(' ');
+        if (name === '.' || name === '..') return null;
+        return {
+          name,
+          type: perms.startsWith('d') ? 'dir' : (perms.startsWith('l') ? 'link' : 'file'),
+          size,
+          permissions: perms,
+        };
+      })
+      .filter(Boolean);
+
+    return c.json({ path, entries });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Unknown error' }, 500);
+  }
+});
+
+// GET /api/admin/files/read?path= - Read file contents
+adminApi.get('/files/read', async (c) => {
+  const sandbox = c.get('sandbox');
+  const filePath = c.req.query('path');
+
+  if (!filePath || !validatePath(filePath)) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  try {
+    const result = await sandbox.exec(`cat "${filePath}"`);
+
+    if (result.exitCode !== 0) {
+      return c.json({ error: 'File not found', details: result.stderr }, 404);
+    }
+
+    return c.json({ path: filePath, content: result.stdout || '' });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Unknown error' }, 500);
+  }
+});
+
+// POST /api/admin/files/write - Create or update a file
+adminApi.post('/files/write', async (c) => {
+  const sandbox = c.get('sandbox');
+  const body = await c.req.json<{ path: string; content: string }>();
+
+  if (!body.path || !validatePath(body.path)) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  try {
+    // Ensure parent directory exists
+    const dir = body.path.substring(0, body.path.lastIndexOf('/'));
+    await sandbox.exec(`mkdir -p "${dir}"`);
+
+    // Write file using base64 to avoid shell escaping issues
+    const encoded = btoa(unescape(encodeURIComponent(body.content)));
+    const result = await sandbox.exec(
+      `echo "${encoded}" | base64 -d > "${body.path}"`,
+    );
+
+    if (result.exitCode !== 0) {
+      return c.json({ error: 'Failed to write file', details: result.stderr }, 500);
+    }
+
+    return c.json({ success: true, path: body.path });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Unknown error' }, 500);
+  }
+});
+
+// POST /api/admin/files/mkdir - Create a directory
+adminApi.post('/files/mkdir', async (c) => {
+  const sandbox = c.get('sandbox');
+  const body = await c.req.json<{ path: string }>();
+
+  if (!body.path || !validatePath(body.path)) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  try {
+    const result = await sandbox.exec(`mkdir -p "${body.path}"`);
+
+    if (result.exitCode !== 0) {
+      return c.json({ error: 'Failed to create directory', details: result.stderr }, 500);
+    }
+
+    return c.json({ success: true, path: body.path });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Unknown error' }, 500);
+  }
+});
+
+// DELETE /api/admin/files?path= - Delete file or directory
+adminApi.delete('/files', async (c) => {
+  const sandbox = c.get('sandbox');
+  const filePath = c.req.query('path');
+
+  if (!filePath || !validatePath(filePath)) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  // Prevent deleting workspace root
+  if (filePath.replace(/\/+$/, '') === WORKSPACE_ROOT) {
+    return c.json({ error: 'Cannot delete workspace root' }, 400);
+  }
+
+  try {
+    const result = await sandbox.exec(`rm -rf "${filePath}"`);
+
+    if (result.exitCode !== 0) {
+      return c.json({ error: 'Failed to delete', details: result.stderr }, 500);
+    }
+
+    return c.json({ success: true, path: filePath });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Unknown error' }, 500);
+  }
+});
+
 // Mount admin API routes under /admin
 api.route('/admin', adminApi);
 
